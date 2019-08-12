@@ -5,6 +5,7 @@ namespace CodeGeneration.Roslyn.Tests.Generators
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.CodeAnalysis;
@@ -92,7 +93,7 @@ namespace CodeGeneration.Roslyn.Tests.Generators
             {
                 return new RichGenerationResult
                 {
-                    Members = SyntaxFactory.List(Members),
+                    Members = Members.Select(m => ChangeMember.AddMember(null, TransformationContext.ProcessingNodeOld, m)).ToList(),
                     Usings = SyntaxFactory.List(Usings),
                     AttributeLists = SyntaxFactory.List(AttributeLists),
                     Externs = SyntaxFactory.List(Externs),

@@ -37,24 +37,25 @@ namespace CodeGeneration.Roslyn.Engine
         /// <summary>
         /// Produces a new document in response to any code generation attributes found in the specified document.
         /// </summary>
-        /// <param name="compilation">The compilation to which the document belongs.</param>
+        /// <param name="csCompilation">The compilation to which the document belongs.</param>
         /// <param name="inputDocument">The document to scan for generator attributes.</param>
         /// <param name="projectDirectory">The path of the <c>.csproj</c> project file.</param>
         /// <param name="assemblyLoader">A function that can load an assembly with the given name.</param>
         /// <param name="progress">Reports warnings and errors in code generation.</param>
         /// <returns>A task whose result is the generated document.</returns>
-        public static async Task<SyntaxTree> TransformAsync(
-            CSharpCompilation compilation,
+        public static async Task<(SyntaxTree, bool)> TransformAsync(
+            CSharpCompilation csCompilation,
+            GeneratorKnownTypes generatorKnownTypes,
             SyntaxTree inputDocument,
             string projectDirectory,
             Func<AssemblyName, Assembly> assemblyLoader,
             IProgress<Diagnostic> progress)
         {
-            Requires.NotNull(compilation, nameof(compilation));
+            Requires.NotNull(csCompilation, nameof(csCompilation));
             Requires.NotNull(inputDocument, nameof(inputDocument));
             Requires.NotNull(assemblyLoader, nameof(assemblyLoader));
 
-            var inputSemanticModel = compilation.GetSemanticModel(inputDocument);
+            var inputSemanticModel = csCompilation.GetSemanticModel(inputDocument);
             var inputCompilationUnit = inputDocument.GetCompilationUnitRoot();
 
             var emittedExterns = inputCompilationUnit
@@ -70,20 +71,101 @@ namespace CodeGeneration.Roslyn.Engine
             var emittedAttributeLists = ImmutableArray<AttributeListSyntax>.Empty;
             var emittedMembers = ImmutableArray<MemberDeclarationSyntax>.Empty;
 
-            var memberNodes = inputDocument
-                .GetRoot()
-                .DescendantNodesAndSelf(n => n is CompilationUnitSyntax || n is NamespaceDeclarationSyntax || n is TypeDeclarationSyntax)
-                .OfType<CSharpSyntaxNode>();
-
-            foreach (var memberNode in memberNodes)
+async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNode resRootNode, SyntaxNode resRootNodeTracked,  RichGenerationResult richGenerationResult)> ProcessNodeTransformation(
+                CSharpCompilation compilation,
+                SemanticModel semanticModel,
+                SyntaxNode rootNode,
+                SyntaxNode rootNodeTracked,
+                SyntaxNode workNode)
             {
-                var attributeData = GetAttributeData(compilation, inputSemanticModel, memberNode);
-                var generators = FindCodeGenerators(attributeData, assemblyLoader);
+                (SyntaxNode, SyntaxNode) ProcessNodes(SyntaxNode root, SyntaxNode processingNode, List<ChangeMember> childs)
+                {
+                    Dictionary<SyntaxNode, SyntaxNode> GetFilteredNodes(List<ChangeMember> innerChilds, Func<ChangeMember, bool> filterFunc, Func<ChangeMember, (SyntaxNode, SyntaxNode)> transformFunc)
+                    {
+                        return innerChilds.Where(filterFunc).Select(transformFunc).ToDictionary(p => p.Item1, p => p.Item2);
+                    }
+
+                    var newProcessingNode = childs.FirstOrDefault(m => m.OldMember != null && m.NewMember != null && m.OldMember == processingNode)?.NewMember;
+
+                    var replNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember != null, c => (root.GetCurrentNode(c.OldMember), c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf())));
+                    root = root.ReplaceNodes(replNodes.Keys, (o, r) => replNodes[o]);
+
+                    var remNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember == null, c => (root.GetCurrentNode(c.OldMember), null));
+                    root = root.RemoveNodes(replNodes.Keys, SyntaxRemoveOptions.KeepNoTrivia);
+
+                    var addNodes = GetFilteredNodes(childs, m => m.OldMember == null && m.NewMember != null, c => (c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf()), root.GetCurrentNode(c.BaseMember)));
+                    foreach (var addNode in addNodes.Keys)
+                    {
+                        root = root.InsertNodesAfter(addNodes[addNode], new[] { addNode });
+                    }
+
+                    if (newProcessingNode != null)
+                    {
+                        newProcessingNode = root.GetCurrentNode(newProcessingNode);
+                    }
+                    else
+                    {
+                        newProcessingNode = processingNode;
+                    }
+
+                    return (root, newProcessingNode);
+                }
+
+                if (workNode == null)
+                {
+                    return (null, null, null, null, null);
+                }
+
+                Logger.Info($"ProcessNodeTransformation Node Type = {workNode.GetType()}, parent = {workNode.Parent}");
+
+                var richGeneratorResult = new RichGenerationResult();
+                var newMemberNode = workNode;
+                if (workNode is CompilationUnitSyntax || workNode is NamespaceDeclarationSyntax || workNode is TypeDeclarationSyntax)
+                {
+                    var rootNodeIsType = workNode is TypeDeclarationSyntax;
+
+                    foreach (var node in workNode.ChildNodes()
+                                                 .Where(n => n is CompilationUnitSyntax
+                                                             || n is NamespaceDeclarationSyntax
+                                                             || n is TypeDeclarationSyntax
+                                                             || rootNodeIsType)
+                                                 .OfType<CSharpSyntaxNode>())
+                    {
+                        var processedNode = node as SyntaxNode;
+
+                        Logger.Info($"ProcessNodeTransformation Inner Node Type = {processedNode.GetType()}");
+
+                        var innerNodesReplacement = await ProcessNodeTransformation(compilation, semanticModel, rootNode, rootNodeTracked, node);
+                        compilation = innerNodesReplacement.compilation;
+                        semanticModel = innerNodesReplacement.semanticModel;
+                        rootNode = innerNodesReplacement.resRootNode;
+                        rootNodeTracked = innerNodesReplacement.resRootNodeTracked;
+
+                        richGeneratorResult.Externs = richGeneratorResult.Externs.AddRange(innerNodesReplacement.richGenerationResult.Externs);
+                        richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(innerNodesReplacement.richGenerationResult.Usings);
+                        richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(innerNodesReplacement.richGenerationResult.AttributeLists);
+                    }
+                }
+
+                Logger.Info($"SProcessNodeTransformation Node Type = {workNode.GetType()}, parent = {workNode.Parent}, parentIsNull = {workNode.Parent == null}");
+
+                newMemberNode = rootNode.GetCurrentNode(workNode) ?? workNode;
+
+                var attributeData = GetAttributeData(compilation, inputSemanticModel, workNode);
+                if (workNode is FieldDeclarationSyntax)
+                {
+                    Logger.Info($"FieldDeclarationSyntax attributeDataCount = {attributeData.Count()}");
+                }
+
+                var generators = FindCodeGenerators(generatorKnownTypes, attributeData, assemblyLoader);
                 foreach (var generator in generators)
                 {
+                    Logger.Info($"newMemberNode before = {newMemberNode}, parent = {newMemberNode?.Parent}");
                     var context = new TransformationContext(
-                        memberNode,
-                        inputSemanticModel,
+                        newMemberNode,
+                        newMemberNode,
+                        newMemberNode.Parent,
+                        semanticModel,
                         compilation,
                         projectDirectory,
                         emittedUsings,
@@ -93,24 +175,57 @@ namespace CodeGeneration.Roslyn.Engine
 
                     var emitted = await richGenerator.GenerateRichAsync(context, progress, CancellationToken.None);
 
-                    emittedExterns = emittedExterns.AddRange(emitted.Externs);
-                    emittedUsings = emittedUsings.AddRange(emitted.Usings);
-                    emittedAttributeLists = emittedAttributeLists.AddRange(emitted.AttributeLists);
-                    emittedMembers = emittedMembers.AddRange(emitted.Members);
+                    var oldRootNode = rootNode;
+                    (rootNode, newMemberNode) = ProcessNodes(rootNodeTracked, newMemberNode, emitted.Members);
+
+                    rootNodeTracked = rootNode.TrackNodes(rootNode.DescendantNodesAndSelf());
+                    Logger.Info($"root! = {rootNode}, newMemberNode!={newMemberNode}, parent = {newMemberNode?.Parent}, newParent = {rootNodeTracked.GetCurrentNode(newMemberNode?.Parent)} ");
+
+                    newMemberNode = rootNode.GetCurrentNode(newMemberNode) ?? newMemberNode;
+
+                    compilation = compilation.ReplaceSyntaxTree(oldRootNode.SyntaxTree, rootNode.SyntaxTree);
+                    semanticModel = compilation.GetSemanticModel(rootNode.SyntaxTree);
+
+                    richGeneratorResult.Externs = richGeneratorResult.Externs.AddRange(emitted.Externs);
+                    richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(emitted.Usings);
+                    richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(emitted.AttributeLists);
+
+                    Logger.Info($"newMemberNode after = {newMemberNode}, parent = {newMemberNode?.Parent}, membersCount = {emitted.Members.Count()}");
                 }
+
+                return (compilation, semanticModel, rootNode, rootNodeTracked,  richGeneratorResult);
             }
 
-            var compilationUnit =
-                SyntaxFactory.CompilationUnit(
-                        SyntaxFactory.List(emittedExterns),
-                        SyntaxFactory.List(emittedUsings),
-                        SyntaxFactory.List(emittedAttributeLists),
+            var oldDocumentRootNode = inputDocument.GetRoot() as CSharpSyntaxNode;
+            var documentRootNode = oldDocumentRootNode.TrackNodes(oldDocumentRootNode.DescendantNodesAndSelf());
+
+            var replaceNode = await ProcessNodeTransformation(csCompilation, inputSemanticModel, oldDocumentRootNode, documentRootNode, oldDocumentRootNode);
+
+            var documentReplaced = replaceNode.resRootNode != inputDocument.GetRoot();
+            Logger.Info($"Document genroot = {replaceNode.resRootNode.GetText()}");
+
+            if (documentReplaced)
+            {
+                Logger.Info($"Replace New Node = {replaceNode.resRootNode.GetType()}, membersCount = {replaceNode.richGenerationResult.Members.Count}");
+                emittedMembers = emittedMembers.AddRange(replaceNode.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>())
+                                               .AddRange(replaceNode.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>())
+                                    .ToImmutableArray();
+            }
+            else
+            {
+                emittedMembers = emittedMembers.AddRange(replaceNode.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>());
+            }
+
+            var compilationUnit = SyntaxFactory.CompilationUnit(
+                        SyntaxFactory.List(emittedExterns.AddRange(replaceNode.richGenerationResult.Externs)),
+                        SyntaxFactory.List(emittedUsings.AddRange(replaceNode.richGenerationResult.Usings)),
+                        SyntaxFactory.List(replaceNode.richGenerationResult.AttributeLists),
                         SyntaxFactory.List(emittedMembers))
                     .WithLeadingTrivia(SyntaxFactory.Comment(GeneratedByAToolPreamble))
                     .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed)
                     .NormalizeWhitespace();
 
-            return compilationUnit.SyntaxTree;
+            return (compilationUnit.SyntaxTree, documentReplaced);
         }
 
         private static ImmutableArray<AttributeData> GetAttributeData(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode)
@@ -123,44 +238,77 @@ namespace CodeGeneration.Roslyn.Engine
             {
                 case CompilationUnitSyntax syntax:
                     return compilation.Assembly.GetAttributes().Where(x => x.ApplicationSyntaxReference.SyntaxTree == syntax.SyntaxTree).ToImmutableArray();
+                case FieldDeclarationSyntax fieldDeclarationSyntax:
+                    var variableAttributes = ImmutableArray<AttributeData>.Empty;
+                    foreach (var variable in fieldDeclarationSyntax.Declaration.Variables)
+                    {
+                        var variableSymbol = document.GetDeclaredSymbol(variable);
+                        var attributes = variableSymbol.GetAttributes();
+                        variableAttributes = variableAttributes.AddRange(attributes);
+                    }
+                    return variableAttributes;
                 default:
                     return document.GetDeclaredSymbol(syntaxNode)?.GetAttributes() ?? ImmutableArray<AttributeData>.Empty;
             }
         }
 
-        private static IEnumerable<ICodeGenerator> FindCodeGenerators(ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly> assemblyLoader)
+        private static IEnumerable<ICodeGenerator> FindCodeGenerators(GeneratorKnownTypes generatorKnownTypes, ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly> assemblyLoader)
         {
+            var foundGenerators = new List<(AttributeData attributeData, Type generatorType, int executionOrder)>();
             foreach (var attributeData in nodeAttributes)
             {
-                Type generatorType = GetCodeGeneratorTypeForAttribute(attributeData.AttributeClass, assemblyLoader);
+                (Type generatorType, int executionOrder) = GetCodeGeneratorTypeForAttribute(generatorKnownTypes, attributeData, assemblyLoader);
                 if (generatorType != null)
                 {
-                    ICodeGenerator generator;
-                    try
-                    {
-                        generator = (ICodeGenerator)Activator.CreateInstance(generatorType, attributeData);
-                    }
-                    catch (MissingMethodException)
-                    {
-                        throw new InvalidOperationException(
-                            $"Failed to instantiate {generatorType}. ICodeGenerator implementations must have" +
-                            $" a constructor accepting Microsoft.CodeAnalysis.AttributeData argument.");
-                    }
-                    yield return generator;
+                    Logger.Info($"Found attribute = {attributeData.AttributeClass.Name}, type = {generatorType}, executionOrder = {executionOrder}");
+                    foundGenerators.Add((attributeData, generatorType, executionOrder));
                 }
+            }
+
+            if (foundGenerators.Count != foundGenerators.Select(g => g.executionOrder).Distinct().Count())
+            {
+                throw new Exception("Unknown execution order - same order use more that once");
+            }
+
+            foreach (var foundGenerator in foundGenerators.OrderBy(g => g.executionOrder))
+            {
+                ICodeGenerator generator;
+                try
+                {
+                   generator = (ICodeGenerator)Activator.CreateInstance(foundGenerator.generatorType, foundGenerator.attributeData);
+                }
+                catch (MissingMethodException)
+                {
+                    throw new InvalidOperationException(
+                            $"Failed to instantiate {foundGenerator.generatorType}. ICodeGenerator implementations must have" +
+                            $" a constructor accepting Microsoft.CodeAnalysis.AttributeData argument.");
+                }
+                yield return generator;
             }
         }
 
-        private static Type GetCodeGeneratorTypeForAttribute(INamedTypeSymbol attributeType, Func<AssemblyName, Assembly> assemblyLoader)
+        private static (Type type, int executionOrder) GetCodeGeneratorTypeForAttribute(GeneratorKnownTypes generatorKnownTypes, AttributeData attributeData, Func<AssemblyName, Assembly> assemblyLoader)
         {
             Requires.NotNull(assemblyLoader, nameof(assemblyLoader));
 
+            var attributeType = attributeData.AttributeClass;
             if (attributeType != null)
             {
                 foreach (var generatorCandidateAttribute in attributeType.GetAttributes())
                 {
-                    if (generatorCandidateAttribute.AttributeClass.Name == typeof(CodeGenerationAttributeAttribute).Name)
+                    if (generatorCandidateAttribute.AttributeClass.OriginalDefinition.Equals(generatorKnownTypes.CodeGenerationAttributeAttributeTypeSymbol))
                     {
+                        var executionOrder = 0;
+                        var hasOrderInterface = attributeType.AllInterfaces.Any(i => i.OriginalDefinition.Equals(generatorKnownTypes.IOrderCodeGenerationTypeSymbol));
+                        if (hasOrderInterface)
+                        {
+                            var executionOrderArgument = attributeData.NamedArguments.FirstOrDefault(a => a.Key == nameof(IOrderedCodeGeneration.ExecutionOrder));
+                            if (!string.IsNullOrEmpty(executionOrderArgument.Key))
+                            {
+                                executionOrder = (int) executionOrderArgument.Value.Value;
+                            }
+                        }
+
                         string assemblyName = null;
                         string fullTypeName = null;
                         TypedConstant firstArg = generatorCandidateAttribute.ConstructorArguments.Single();
@@ -189,10 +337,11 @@ namespace CodeGeneration.Roslyn.Engine
 
                         if (assemblyName != null)
                         {
+                            Logger.Info($"assemblyLoader assemblyName = {assemblyName}, fullTypeName = {fullTypeName}");
                             var assembly = assemblyLoader(new AssemblyName(assemblyName));
                             if (assembly != null)
                             {
-                                return assembly.GetType(fullTypeName);
+                               return (assembly.GetType(fullTypeName), executionOrder);
                             }
                         }
 
@@ -201,7 +350,7 @@ namespace CodeGeneration.Roslyn.Engine
                 }
             }
 
-            return null;
+            return (null, 0);
         }
 
         private static string GetFullTypeName(INamedTypeSymbol symbol)
@@ -248,7 +397,7 @@ namespace CodeGeneration.Roslyn.Engine
 
                 // Figure out ancestry for the generated type, including nesting types and namespaces.
                 var wrappedMembers = context.ProcessingNode.Ancestors().Aggregate(generatedMembers, WrapInAncestor);
-                return new RichGenerationResult { Members = wrappedMembers };
+                return new RichGenerationResult { Members = wrappedMembers.Select(m => ChangeMember.AddMember(null, context.ProcessingNodeOld, m)).ToList() };
             }
 
             private static SyntaxList<MemberDeclarationSyntax> WrapInAncestor(SyntaxList<MemberDeclarationSyntax> generatedMembers, SyntaxNode ancestor)

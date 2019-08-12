@@ -32,6 +32,7 @@ namespace CodeGeneration.Roslyn.Engine
 
         private readonly List<string> emptyGeneratedFiles = new List<string>();
         private readonly List<string> generatedFiles = new List<string>();
+        private readonly HashSet<string> replacedFiles = new HashSet<string>();
         private readonly List<string> additionalWrittenFiles = new List<string>();
         private readonly List<string> loadedAssemblies = new List<string>();
         private readonly Dictionary<string, Assembly> assembliesByPath = new Dictionary<string, Assembly>();
@@ -68,6 +69,11 @@ namespace CodeGeneration.Roslyn.Engine
         /// Gets the set of files generated after <see cref="Generate"/> is invoked.
         /// </summary>
         public IEnumerable<string> GeneratedFiles => this.generatedFiles;
+
+        /// <summary>
+        /// Gets the set of files replaced after <see cref="Generate"/> is invoked.
+        /// </summary>
+        public IEnumerable<string> ReplacedFiles => this.replacedFiles;
 
         /// <summary>
         /// Gets the set of files written in addition to those found in <see cref="GeneratedFiles"/>.
@@ -114,6 +120,7 @@ namespace CodeGeneration.Roslyn.Engine
             Verify.Operation(this.GeneratorAssemblySearchPaths != null, $"{nameof(GeneratorAssemblySearchPaths)} must be set first.");
 
             var compilation = this.CreateCompilation(cancellationToken);
+            var generatorKnowTypes = new GeneratorKnownTypes(compilation);
 
             string generatorAssemblyInputsFile = Path.Combine(this.IntermediateOutputDirectory, InputAssembliesIntermediateOutputFileName);
 
@@ -131,23 +138,39 @@ namespace CodeGeneration.Roslyn.Engine
                     string sourceHash = Convert.ToBase64String(hasher.ComputeHash(Encoding.UTF8.GetBytes(inputSyntaxTree.FilePath)), 0, 6).Replace('/', '-');
                     Logger.Info($"File \"{inputSyntaxTree.FilePath}\" hashed to {sourceHash}");
                     string outputFilePath = Path.Combine(this.IntermediateOutputDirectory, Path.GetFileNameWithoutExtension(inputSyntaxTree.FilePath) + $".{sourceHash}.generated.cs");
+                    string replacedOutputFilePath = Path.Combine(this.IntermediateOutputDirectory, Path.GetFileNameWithoutExtension(inputSyntaxTree.FilePath) + $".{sourceHash}_r.generated.cs");
+
+                    var fileRegenerated = false;
+                    var outputFilePathExists = File.Exists(outputFilePath);
+                    var replacedOutputFilePathExists = !outputFilePathExists && File.Exists(replacedOutputFilePath);
 
                     // Code generation is relatively fast, but it's not free.
                     // So skip files that haven't changed since we last generated them.
-                    DateTime outputLastModified = File.Exists(outputFilePath) ? File.GetLastWriteTime(outputFilePath) : DateTime.MinValue;
+                    DateTime outputLastModified = outputFilePathExists
+                                                  ? File.GetLastWriteTime(outputFilePath)
+                                                  : replacedOutputFilePathExists
+                                                    ? File.GetLastWriteTime(replacedOutputFilePath)
+                                                    : DateTime.MinValue;
                     if (File.GetLastWriteTime(inputSyntaxTree.FilePath) > outputLastModified || assembliesLastModified > outputLastModified)
                     {
+                        fileRegenerated = true;
                         int retriesLeft = 3;
                         do
                         {
                             try
                             {
-                                var generatedSyntaxTree = DocumentTransform.TransformAsync(
+                                (var generatedSyntaxTree, var replaceFile) = DocumentTransform.TransformAsync(
                                     compilation,
+                                    generatorKnowTypes,
                                     inputSyntaxTree,
                                     this.ProjectDirectory,
                                     this.LoadAssembly,
                                     progress).GetAwaiter().GetResult();
+
+                                if (replaceFile)
+                                {
+                                    outputFilePath = replacedOutputFilePath;
+                                }
 
                                 var outputText = generatedSyntaxTree.GetText(cancellationToken);
                                 using (var outputFileStream = File.OpenWrite(outputFilePath))
@@ -183,7 +206,17 @@ namespace CodeGeneration.Roslyn.Engine
                         while (true);
                     }
 
+                    if (!fileRegenerated && replacedOutputFilePathExists)
+                    {
+                        outputFilePath = replacedOutputFilePath;
+                    }
+
                     this.generatedFiles.Add(outputFilePath);
+
+                    if (outputFilePath == replacedOutputFilePath)
+                    {
+                        replacedFiles.Add(inputSyntaxTree.FilePath);
+                    }
                 }
             }
 

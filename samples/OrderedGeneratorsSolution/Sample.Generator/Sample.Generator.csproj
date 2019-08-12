@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CodeGeneration.Roslyn" Version="$(LocalNuGetVersion)" />
+    <PackageReference Include="CodeGeneration.Roslyn.Attributes" Version="$(LocalNuGetVersion)" />
+    <PackageReference Include="Validation" Version="2.4.18" />
+  </ItemGroup>
+
+</Project>

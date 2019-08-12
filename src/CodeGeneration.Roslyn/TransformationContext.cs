@@ -17,13 +17,16 @@ namespace CodeGeneration.Roslyn
         /// Initializes a new instance of the <see cref="TransformationContext" /> class.
         /// </summary>
         /// <param name="processingNode">The syntax node the generator attribute is found on.</param>
+        /// <param name="processingNodeOldPrarent">The syntax node old parent</param>
         /// <param name="semanticModel">The semantic model.</param>
         /// <param name="compilation">The overall compilation being generated for.</param>
         /// <param name="projectDirectory">The absolute path of the directory where the project file is located.</param>
         /// <param name="compilationUnitUsings">The using directives already queued to be generated.</param>
         /// <param name="compilationUnitExterns">The extern aliases already queued to be generated.</param>
         public TransformationContext(
-            CSharpSyntaxNode processingNode,
+            SyntaxNode processingNode,
+            SyntaxNode processingNodeOld,
+            SyntaxNode processingNodeOldPrarent,
             SemanticModel semanticModel,
             CSharpCompilation compilation,
             string projectDirectory,
@@ -31,6 +34,8 @@ namespace CodeGeneration.Roslyn
             IEnumerable<ExternAliasDirectiveSyntax> compilationUnitExterns)
         {
             ProcessingNode = processingNode;
+            ProcessingNodeOld = processingNodeOld;
+            ProcessingNodeOldParent = processingNodeOldPrarent;
             SemanticModel = semanticModel;
             Compilation = compilation;
             ProjectDirectory = projectDirectory;
@@ -39,7 +44,13 @@ namespace CodeGeneration.Roslyn
         }
 
         /// <summary>Gets the syntax node the generator attribute is found on.</summary>
-        public CSharpSyntaxNode ProcessingNode { get; }
+        public SyntaxNode ProcessingNode { get; }
+
+        /// <summary></summary>
+        public SyntaxNode ProcessingNodeOld { get; }
+
+        /// <summary></summary>
+        public SyntaxNode ProcessingNodeOldParent { get; }
 
         /// <summary>Gets the semantic model for the <see cref="Compilation" />.</summary>
         public SemanticModel SemanticModel { get; }

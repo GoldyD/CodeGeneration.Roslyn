@@ -29,6 +29,7 @@
       <_CodeGenToolOutputBasePath>$(IntermediateOutputPath)$(MSBuildProjectFile).dotnet-codegen</_CodeGenToolOutputBasePath>
       <_CodeGenToolResponseFileFullPath>$(_CodeGenToolOutputBasePath).rsp</_CodeGenToolResponseFileFullPath>
       <_CodeGenToolGeneratedFileListFullPath>$(_CodeGenToolOutputBasePath).GeneratedFileList.txt</_CodeGenToolGeneratedFileListFullPath>
+      <_CodeGenToolReplacedFileListFullPath>$(_CodeGenToolOutputBasePath).ReplacedFileList.txt</_CodeGenToolReplacedFileListFullPath>
       <_CodeGenToolResponseFileLines>
         @(ReferencePath->'-r;%(Identity)');
         @(DefineConstantsItems->'-d;%(Identity)');
@@ -39,6 +40,8 @@
         $(MSBuildProjectDirectory);
         --generatedFilesList;
         $(_CodeGenToolGeneratedFileListFullPath);
+        --replacedFilesList
+        $(_CodeGenToolReplacedFileListFullPath)
         --;
         @(Compile_CodeGenInputs)
       </_CodeGenToolResponseFileLines>
@@ -92,8 +95,12 @@
       <Output TaskParameter="Lines" ItemName="CodeGenerationRoslynOutput_Compile"/>
       <Output TaskParameter="Lines" ItemName="FileWrites"/>
     </ReadLinesFromFile>
+    <ReadLinesFromFile File="$(_CodeGenToolReplacedFileListFullPath)">
+      <Output TaskParameter="Lines" ItemName="CodeGenerationRoslynOutput_Remove"/>
+    </ReadLinesFromFile>
     <ItemGroup>
       <Compile Include="@(CodeGenerationRoslynOutput_Compile)" />
+      <Compile Remove="@(CodeGenerationRoslynOutput_Remove)" />
       <FileWrites Include="$(_CodeGenToolGeneratedFileListFullPath)" />
     </ItemGroup>
   </Target>

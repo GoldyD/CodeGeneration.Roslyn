@@ -19,6 +19,7 @@ namespace CodeGeneration.Roslyn.Generate
             IReadOnlyList<string> preprocessorSymbols = Array.Empty<string>();
             IReadOnlyList<string> generatorSearchPaths = Array.Empty<string>();
             string generatedCompileItemFile = null;
+            string replacedCompileItemFile = null;
             string outputDirectory = null;
             string projectDir = null;
             bool version = false;
@@ -31,6 +32,7 @@ namespace CodeGeneration.Roslyn.Generate
                 syntax.DefineOption("out", ref outputDirectory, true, "The directory to write generated source files to");
                 syntax.DefineOption("projectDir", ref projectDir, true, "The absolute path of the directory where the project file is located");
                 syntax.DefineOption("generatedFilesList", ref generatedCompileItemFile, "The path to the file to create with a list of generated source files");
+                syntax.DefineOption("replacedFilesList", ref replacedCompileItemFile, "The path to the file to create with a list of replaced source files");
                 syntax.DefineParameterList("compile", ref compile, "Source files included in compilation");
             });
 
@@ -82,6 +84,18 @@ namespace CodeGeneration.Roslyn.Generate
             foreach (var file in generator.GeneratedFiles)
             {
                 Logger.Info(file);
+            }
+
+            Logger.Info($"replacedCompileItemFile is null = {replacedCompileItemFile == null}");
+
+            if (replacedCompileItemFile != null)
+            {
+                File.WriteAllLines(replacedCompileItemFile, generator.ReplacedFiles);
+            }
+
+            foreach (var file in generator.ReplacedFiles)
+            {
+                Logger.Info($"replaced = {file}");
             }
 
             return 0;

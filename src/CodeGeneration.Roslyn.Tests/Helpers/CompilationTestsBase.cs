@@ -74,11 +74,12 @@ public abstract class CompilationTestsBase
         var document = CreateProject(source).Documents.Single();
         var tree = document.GetSyntaxTreeAsync().GetAwaiter().GetResult();
         var compilation = (CSharpCompilation)document.Project.GetCompilationAsync().GetAwaiter().GetResult();
+        var generatorKnowTypes = new GeneratorKnownTypes(compilation);
         var diagnostics = compilation.GetDiagnostics();
         Assert.Empty(diagnostics.Where(x => x.Severity >= DiagnosticSeverity.Warning));
         var progress = new Progress<Diagnostic>();
-        var result = DocumentTransform.TransformAsync(compilation, tree, null, Assembly.Load, progress).GetAwaiter().GetResult();
-        return result;
+        var result = DocumentTransform.TransformAsync(compilation, generatorKnowTypes, tree, null, Assembly.Load, progress).GetAwaiter().GetResult();
+        return result.Item1;
     }
 
     protected static Project CreateProject(params string[] sources)
