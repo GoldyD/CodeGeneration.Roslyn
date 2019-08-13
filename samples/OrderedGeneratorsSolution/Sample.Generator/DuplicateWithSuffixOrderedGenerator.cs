@@ -5,9 +5,7 @@ namespace Sample.Generator
 {
     using System;
     using System.Collections.Generic;
-    using System.Collections.Immutable;
     using System.Linq;
-    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.CodeAnalysis;
@@ -19,7 +17,6 @@ namespace Sample.Generator
     public class DuplicateWithSuffixOrderedGenerator : IRichCodeGenerator
     {
         private readonly AttributeData attributeData;
-        private readonly ImmutableDictionary<string, TypedConstant> data;
         private readonly string suffix;
 
         public DuplicateWithSuffixOrderedGenerator(AttributeData attributeData)
@@ -28,7 +25,6 @@ namespace Sample.Generator
 
             this.suffix = (string)attributeData.ConstructorArguments[0].Value;
             this.attributeData = attributeData;
-            this.data = this.attributeData.NamedArguments.ToImmutableDictionary(kv => kv.Key, kv => kv.Value);
         }
 
         public Task<SyntaxList<MemberDeclarationSyntax>> GenerateAsync(TransformationContext context, IProgress<Diagnostic> progress, CancellationToken cancellationToken)

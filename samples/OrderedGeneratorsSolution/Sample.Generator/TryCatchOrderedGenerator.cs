@@ -5,7 +5,6 @@ namespace Sample.Generator
 {
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
@@ -28,21 +27,6 @@ namespace Sample.Generator
             var semanticModelRoot = context.SemanticModel.SyntaxTree.GetRoot();
 
             var typeInfo = context.SemanticModel.GetDeclaredSymbol(processMemberNode);
-            Logger.Log(LogLevel.Info, $"typeInfo = {typeInfo}");
-
-            if (typeInfo is INamespaceOrTypeSymbol typeSymbol)
-            {
-                foreach (var member in typeSymbol.GetMembers())
-                {
-                    Logger.Log(LogLevel.Info, $"declaryng member = { member.Name }");
-                    foreach (var declaringSyntaxReference in member.DeclaringSyntaxReferences)
-                    {
-                        Logger.Log(LogLevel.Info, $"declaryng syntax reference = { declaringSyntaxReference.GetSyntax() }");
-                    }
-                }
-            }
-
-            Logger.Log(LogLevel.Info, $"Methods count = {processMemberNode.DescendantNodes().OfType<MethodDeclarationSyntax>().ToList().Count()}");            
 
             Dictionary<MethodDeclarationSyntax, MethodDeclarationSyntax> replacedMethods =
                 new Dictionary<MethodDeclarationSyntax, MethodDeclarationSyntax>();
@@ -60,15 +44,6 @@ namespace Sample.Generator
                                                      .WithBlock(method.Body)))).NormalizeWhitespace();
                 replacedMethods.Add(method, newMethod);
             }
-
-            foreach (var item in replacedMethods)
-            {
-                newProcessMemberNode = newProcessMemberNode.ReplaceNodes(replacedMethods.Keys, (k, n) => replacedMethods[k]);
-            }
-
-            newProcessMemberNode = newProcessMemberNode.NormalizeWhitespace();
-
-            Logger.Log(LogLevel.Info, $"NewRoot body = {newProcessMemberNode.GetText()}, parent = {context.ProcessingNodeOldParent}");
            
             return new RichGenerationResult
             {

@@ -123,8 +123,6 @@ namespace CodeGeneration.Roslyn.Engine
                     return (null, null, null, null, false, null);
                 }
 
-                Logger.Info($"ProcessNodeTransformation Node Type = {workNode.GetType()}, parent = {workNode.Parent}");
-
                 var richGeneratorResult = new RichGenerationResult();
                 var newMemberNode = workNode;
                 if (workNode is CompilationUnitSyntax || workNode is NamespaceDeclarationSyntax || workNode is TypeDeclarationSyntax)
@@ -140,8 +138,6 @@ namespace CodeGeneration.Roslyn.Engine
                     {
                         var processedNode = node as SyntaxNode;
 
-                        Logger.Info($"ProcessNodeTransformation Inner Node Type = {processedNode.GetType()}");
-
                         var innerNodesReplacement = await ProcessNodeTransformation(compilation, semanticModel, rootNode, rootNodeTracked, treeChanged, node);
                         compilation = innerNodesReplacement.compilation;
                         semanticModel = innerNodesReplacement.semanticModel;
@@ -156,20 +152,13 @@ namespace CodeGeneration.Roslyn.Engine
                     }
                 }
 
-                Logger.Info($"SProcessNodeTransformation Node Type = {workNode.GetType()}, parent = {workNode.Parent}, parentIsNull = {workNode.Parent == null}");
-
                 newMemberNode = rootNode.GetCurrentNode(workNode) ?? workNode;
 
-                var attributeData = GetAttributeData(compilation, inputSemanticModel, workNode);
-                if (workNode is FieldDeclarationSyntax)
-                {
-                    Logger.Info($"FieldDeclarationSyntax attributeDataCount = {attributeData.Count()}");
-                }
+                var attributeData = GetAttributeData(compilation, inputSemanticModel, workNode);                
 
                 var generators = FindCodeGenerators(generatorKnownTypes, attributeData, assemblyLoader);
                 foreach (var generator in generators)
                 {
-                    Logger.Info($"newMemberNode before = {newMemberNode}, parent = {newMemberNode?.Parent}");
                     var context = new TransformationContext(
                         newMemberNode,
                         semanticModel,
@@ -185,14 +174,12 @@ namespace CodeGeneration.Roslyn.Engine
                     if (!treeChanged)
                     {
                         treeChanged = emitted.Members.Any(m => m.NewMember == null || !(m.NewMember is BaseTypeDeclarationSyntax));
-                        Logger.Info($"treeChanged = {treeChanged}");
                     }
 
                     var oldRootNode = rootNode;
                     (rootNode, newMemberNode) = ProcessNodes(rootNodeTracked, newMemberNode, emitted.Members);
 
                     rootNodeTracked = rootNode.TrackNodes(rootNode.DescendantNodesAndSelf());
-                    Logger.Info($"root! = {rootNode}, newMemberNode!={newMemberNode}, parent = {newMemberNode?.Parent}, newParent = {rootNodeTracked.GetCurrentNode(newMemberNode?.Parent)} ");
 
                     newMemberNode = rootNode.GetCurrentNode(newMemberNode) ?? newMemberNode;
 
@@ -203,8 +190,6 @@ namespace CodeGeneration.Roslyn.Engine
                     richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(emitted.Usings);
                     richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(emitted.AttributeLists);
                     richGeneratorResult.Members.AddRange(emitted.Members.Where(m => m.OldMember == null && m.NewMember is BaseTypeDeclarationSyntax));
-
-                    Logger.Info($"newMemberNode after = {newMemberNode}, parent = {newMemberNode?.Parent}, membersCount = {emitted.Members.Count()}");
                 }
 
                 return (compilation, semanticModel, rootNode, rootNodeTracked, treeChanged,  richGeneratorResult);
@@ -215,22 +200,13 @@ namespace CodeGeneration.Roslyn.Engine
 
             var processNodeResult = await ProcessNodeTransformation(csCompilation, inputSemanticModel, oldDocumentRootNode, documentRootNode, false, oldDocumentRootNode);
 
-            var documentReplaced = processNodeResult.treeChanged;
-            Logger.Info($"Document genroot = {processNodeResult.resRootNode.GetText()}");
-
-            if (documentReplaced)
+            if (processNodeResult.treeChanged)
             {
-                Logger.Info($"Replace New Node = {processNodeResult.resRootNode.GetType()}, membersCount = {processNodeResult.richGenerationResult.Members.Count}");
                 emittedMembers = processNodeResult.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>().ToImmutableArray();
             }
             else
             {
                 emittedMembers = processNodeResult.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>().ToImmutableArray();
-            }
-
-            foreach (var emmitedMember in emittedMembers)
-            {
-                Logger.Info($"emmited Member = {emmitedMember}");
             }
 
             var compilationUnit = SyntaxFactory.CompilationUnit(
@@ -242,7 +218,7 @@ namespace CodeGeneration.Roslyn.Engine
                     .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed)
                     .NormalizeWhitespace();
 
-            return (compilationUnit.SyntaxTree, documentReplaced);
+            return (compilationUnit.SyntaxTree, processNodeResult.treeChanged);
         }
 
         private static ImmutableArray<AttributeData> GetAttributeData(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode)
@@ -282,10 +258,12 @@ namespace CodeGeneration.Roslyn.Engine
                 }
             }
 
+            /*
             if (foundGenerators.Count != foundGenerators.Select(g => g.executionOrder).Distinct().Count())
             {
                 throw new Exception("Unknown execution order - same order use more that once");
             }
+            */
 
             foreach (var foundGenerator in foundGenerators.OrderBy(g => g.executionOrder))
             {
