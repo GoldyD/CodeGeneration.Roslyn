@@ -71,11 +71,17 @@ namespace CodeGeneration.Roslyn.Engine
             var emittedAttributeLists = ImmutableArray<AttributeListSyntax>.Empty;
             var emittedMembers = ImmutableArray<MemberDeclarationSyntax>.Empty;
 
-async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNode resRootNode, SyntaxNode resRootNodeTracked,  RichGenerationResult richGenerationResult)> ProcessNodeTransformation(
+            async Task<(CSharpCompilation compilation,
+                        SemanticModel semanticModel,
+                        SyntaxNode resRootNode,
+                        SyntaxNode resRootNodeTracked,
+                        bool treeChanged,
+                        RichGenerationResult richGenerationResult)> ProcessNodeTransformation(
                 CSharpCompilation compilation,
                 SemanticModel semanticModel,
                 SyntaxNode rootNode,
                 SyntaxNode rootNodeTracked,
+                bool treeChanged,
                 SyntaxNode workNode)
             {
                 (SyntaxNode, SyntaxNode) ProcessNodes(SyntaxNode root, SyntaxNode processingNode, List<ChangeMember> childs)
@@ -87,16 +93,17 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
 
                     var newProcessingNode = childs.FirstOrDefault(m => m.OldMember != null && m.NewMember != null && m.OldMember == processingNode)?.NewMember;
 
-                    var replNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember != null, c => (root.GetCurrentNode(c.OldMember), c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf())));
-                    root = root.ReplaceNodes(replNodes.Keys, (o, r) => replNodes[o]);
+                    var replaceNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember != null, c => (root.GetCurrentNode(c.OldMember), c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf())));
+                    root = root.ReplaceNodes(replaceNodes.Keys, (o, r) => replaceNodes[o]);
 
-                    var remNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember == null, c => (root.GetCurrentNode(c.OldMember), null));
-                    root = root.RemoveNodes(replNodes.Keys, SyntaxRemoveOptions.KeepNoTrivia);
+                    var removeNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember == null, c => (root.GetCurrentNode(c.OldMember), null));
+                    root = root.RemoveNodes(removeNodes.Keys, SyntaxRemoveOptions.KeepNoTrivia);
 
-                    var addNodes = GetFilteredNodes(childs, m => m.OldMember == null && m.NewMember != null, c => (c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf()), root.GetCurrentNode(c.BaseMember)));
-                    foreach (var addNode in addNodes.Keys)
+                    var insertNodes = GetFilteredNodes(childs, m => m.OldMember == null && m.NewMember != null, c => (c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf()), c.BaseMember));
+                    foreach (var addNode in insertNodes.Keys)
                     {
-                        root = root.InsertNodesAfter(addNodes[addNode], new[] { addNode });
+                        var baseNode = root.GetCurrentNode(insertNodes[addNode]);
+                        root = root.InsertNodesAfter(baseNode, new[] { addNode });
                     }
 
                     if (newProcessingNode != null)
@@ -113,7 +120,7 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
 
                 if (workNode == null)
                 {
-                    return (null, null, null, null, null);
+                    return (null, null, null, null, false, null);
                 }
 
                 Logger.Info($"ProcessNodeTransformation Node Type = {workNode.GetType()}, parent = {workNode.Parent}");
@@ -135,15 +142,17 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
 
                         Logger.Info($"ProcessNodeTransformation Inner Node Type = {processedNode.GetType()}");
 
-                        var innerNodesReplacement = await ProcessNodeTransformation(compilation, semanticModel, rootNode, rootNodeTracked, node);
+                        var innerNodesReplacement = await ProcessNodeTransformation(compilation, semanticModel, rootNode, rootNodeTracked, treeChanged, node);
                         compilation = innerNodesReplacement.compilation;
                         semanticModel = innerNodesReplacement.semanticModel;
                         rootNode = innerNodesReplacement.resRootNode;
                         rootNodeTracked = innerNodesReplacement.resRootNodeTracked;
+                        treeChanged = innerNodesReplacement.treeChanged;
 
                         richGeneratorResult.Externs = richGeneratorResult.Externs.AddRange(innerNodesReplacement.richGenerationResult.Externs);
                         richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(innerNodesReplacement.richGenerationResult.Usings);
                         richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(innerNodesReplacement.richGenerationResult.AttributeLists);
+                        richGeneratorResult.Members.AddRange(innerNodesReplacement.richGenerationResult.Members);
                     }
                 }
 
@@ -163,8 +172,6 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
                     Logger.Info($"newMemberNode before = {newMemberNode}, parent = {newMemberNode?.Parent}");
                     var context = new TransformationContext(
                         newMemberNode,
-                        newMemberNode,
-                        newMemberNode.Parent,
                         semanticModel,
                         compilation,
                         projectDirectory,
@@ -174,6 +181,12 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
                     var richGenerator = generator as IRichCodeGenerator ?? new EnrichingCodeGeneratorProxy(generator);
 
                     var emitted = await richGenerator.GenerateRichAsync(context, progress, CancellationToken.None);
+
+                    if (!treeChanged)
+                    {
+                        treeChanged = emitted.Members.Any(m => m.NewMember == null || !(m.NewMember is BaseTypeDeclarationSyntax));
+                        Logger.Info($"treeChanged = {treeChanged}");
+                    }
 
                     var oldRootNode = rootNode;
                     (rootNode, newMemberNode) = ProcessNodes(rootNodeTracked, newMemberNode, emitted.Members);
@@ -189,37 +202,41 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
                     richGeneratorResult.Externs = richGeneratorResult.Externs.AddRange(emitted.Externs);
                     richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(emitted.Usings);
                     richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(emitted.AttributeLists);
+                    richGeneratorResult.Members.AddRange(emitted.Members.Where(m => m.OldMember == null && m.NewMember is BaseTypeDeclarationSyntax));
 
                     Logger.Info($"newMemberNode after = {newMemberNode}, parent = {newMemberNode?.Parent}, membersCount = {emitted.Members.Count()}");
                 }
 
-                return (compilation, semanticModel, rootNode, rootNodeTracked,  richGeneratorResult);
+                return (compilation, semanticModel, rootNode, rootNodeTracked, treeChanged,  richGeneratorResult);
             }
 
             var oldDocumentRootNode = inputDocument.GetRoot() as CSharpSyntaxNode;
             var documentRootNode = oldDocumentRootNode.TrackNodes(oldDocumentRootNode.DescendantNodesAndSelf());
 
-            var replaceNode = await ProcessNodeTransformation(csCompilation, inputSemanticModel, oldDocumentRootNode, documentRootNode, oldDocumentRootNode);
+            var processNodeResult = await ProcessNodeTransformation(csCompilation, inputSemanticModel, oldDocumentRootNode, documentRootNode, false, oldDocumentRootNode);
 
-            var documentReplaced = replaceNode.resRootNode != inputDocument.GetRoot();
-            Logger.Info($"Document genroot = {replaceNode.resRootNode.GetText()}");
+            var documentReplaced = processNodeResult.treeChanged;
+            Logger.Info($"Document genroot = {processNodeResult.resRootNode.GetText()}");
 
             if (documentReplaced)
             {
-                Logger.Info($"Replace New Node = {replaceNode.resRootNode.GetType()}, membersCount = {replaceNode.richGenerationResult.Members.Count}");
-                emittedMembers = emittedMembers.AddRange(replaceNode.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>())
-                                               .AddRange(replaceNode.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>())
-                                    .ToImmutableArray();
+                Logger.Info($"Replace New Node = {processNodeResult.resRootNode.GetType()}, membersCount = {processNodeResult.richGenerationResult.Members.Count}");
+                emittedMembers = processNodeResult.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>().ToImmutableArray();
             }
             else
             {
-                emittedMembers = emittedMembers.AddRange(replaceNode.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>());
+                emittedMembers = processNodeResult.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>().ToImmutableArray();
+            }
+
+            foreach (var emmitedMember in emittedMembers)
+            {
+                Logger.Info($"emmited Member = {emmitedMember}");
             }
 
             var compilationUnit = SyntaxFactory.CompilationUnit(
-                        SyntaxFactory.List(emittedExterns.AddRange(replaceNode.richGenerationResult.Externs)),
-                        SyntaxFactory.List(emittedUsings.AddRange(replaceNode.richGenerationResult.Usings)),
-                        SyntaxFactory.List(replaceNode.richGenerationResult.AttributeLists),
+                        SyntaxFactory.List(emittedExterns.AddRange(processNodeResult.richGenerationResult.Externs)),
+                        SyntaxFactory.List(emittedUsings.AddRange(processNodeResult.richGenerationResult.Usings)),
+                        SyntaxFactory.List(processNodeResult.richGenerationResult.AttributeLists),
                         SyntaxFactory.List(emittedMembers))
                     .WithLeadingTrivia(SyntaxFactory.Comment(GeneratedByAToolPreamble))
                     .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed)
@@ -397,7 +414,7 @@ async Task<(CSharpCompilation compilation, SemanticModel semanticModel, SyntaxNo
 
                 // Figure out ancestry for the generated type, including nesting types and namespaces.
                 var wrappedMembers = context.ProcessingNode.Ancestors().Aggregate(generatedMembers, WrapInAncestor);
-                return new RichGenerationResult { Members = wrappedMembers.Select(m => ChangeMember.AddMember(null, context.ProcessingNodeOld, m)).ToList() };
+                return new RichGenerationResult { Members = wrappedMembers.Select(m => ChangeMember.AddMember(context.ProcessingNode, m)).ToList() };
             }
 
             private static SyntaxList<MemberDeclarationSyntax> WrapInAncestor(SyntaxList<MemberDeclarationSyntax> generatedMembers, SyntaxNode ancestor)

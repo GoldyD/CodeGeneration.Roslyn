@@ -69,11 +69,11 @@ namespace Sample.Generator
             newProcessMemberNode = newProcessMemberNode.NormalizeWhitespace();
 
             Logger.Log(LogLevel.Info, $"NewRoot body = {newProcessMemberNode.GetText()}, parent = {context.ProcessingNodeOldParent}");
-
+           
             return new RichGenerationResult
             {
-                Members = replacedMethods.Select(p => ChangeMember.ReplaceMember(p.Key, context.ProcessingNodeOld, p.Value)).ToList(),
-                Usings = SyntaxFactory.List<UsingDirectiveSyntax>(),
+                Members = replacedMethods.Select(p => ChangeMember.ReplaceMember(p.Key, p.Value)).ToList(),
+                Usings = SyntaxFactory.List<UsingDirectiveSyntax>().Add(SyntaxFactory.UsingDirective(SyntaxFactory.IdentifierName("System"))),
                 AttributeLists = SyntaxFactory.List<AttributeListSyntax>(),
                 Externs = SyntaxFactory.List<ExternAliasDirectiveSyntax>()
             };

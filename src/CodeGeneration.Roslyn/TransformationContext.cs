@@ -25,8 +25,6 @@ namespace CodeGeneration.Roslyn
         /// <param name="compilationUnitExterns">The extern aliases already queued to be generated.</param>
         public TransformationContext(
             SyntaxNode processingNode,
-            SyntaxNode processingNodeOld,
-            SyntaxNode processingNodeOldPrarent,
             SemanticModel semanticModel,
             CSharpCompilation compilation,
             string projectDirectory,
@@ -34,8 +32,6 @@ namespace CodeGeneration.Roslyn
             IEnumerable<ExternAliasDirectiveSyntax> compilationUnitExterns)
         {
             ProcessingNode = processingNode;
-            ProcessingNodeOld = processingNodeOld;
-            ProcessingNodeOldParent = processingNodeOldPrarent;
             SemanticModel = semanticModel;
             Compilation = compilation;
             ProjectDirectory = projectDirectory;

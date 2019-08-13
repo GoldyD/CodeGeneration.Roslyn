@@ -93,7 +93,7 @@ namespace CodeGeneration.Roslyn.Tests.Generators
             {
                 return new RichGenerationResult
                 {
-                    Members = Members.Select(m => ChangeMember.AddMember(null, TransformationContext.ProcessingNodeOld, m)).ToList(),
+                    Members = Members.Select(m => ChangeMember.AddMember(TransformationContext.ProcessingNode, m)).ToList(),
                     Usings = SyntaxFactory.List(Usings),
                     AttributeLists = SyntaxFactory.List(AttributeLists),
                     Externs = SyntaxFactory.List(Externs),

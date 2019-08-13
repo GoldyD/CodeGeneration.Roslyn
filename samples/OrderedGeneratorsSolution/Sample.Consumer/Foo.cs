@@ -1,6 +1,4 @@
 ﻿using Sample.Generator;
-using System;
-using System.Threading.Tasks;
 
 namespace Sample.Consumer
 {

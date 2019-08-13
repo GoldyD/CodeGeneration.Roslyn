@@ -76,8 +76,8 @@ namespace Sample.Generator
             {
                 copy = applyToClass
                     .WithIdentifier(SyntaxFactory.Identifier(applyToClass.Identifier.ValueText + this.suffix));
-                results.Add(ChangeMember.AddMember(context.ProcessingNodeOldParent, context.ProcessingNodeOld,  copy));
-                //results.Add(ChangeMember.ReplaceMember(context.ProcessingNodeOld, context.ProcessingNodeOldParent, copy));
+                results.Add(ChangeMember.AddMember(context.ProcessingNode,  copy));
+                //results.Add(ChangeMember.ReplaceMember(context.ProcessingNode, copy));
             }
 
             var applyToField = context.ProcessingNode as FieldDeclarationSyntax;
@@ -94,7 +94,7 @@ namespace Sample.Generator
                         return v;
                     })
                     )));
-                results.Add(ChangeMember.AddMember(context.ProcessingNodeOldParent, context.ProcessingNodeOld, copy));
+                results.Add(ChangeMember.AddMember(context.ProcessingNode, copy));
             }
 
             return new RichGenerationResult
