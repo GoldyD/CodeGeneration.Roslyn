@@ -91,13 +91,23 @@ namespace CodeGeneration.Roslyn.Engine
                         return innerChilds.Where(filterFunc).Select(transformFunc).ToDictionary(p => p.Item1, p => p.Item2);
                     }
 
-                    var newProcessingNode = childs.FirstOrDefault(m => m.OldMember != null && m.NewMember != null && m.OldMember == processingNode)?.NewMember;
+                    SyntaxNode newProcessingNode = null;
+                    SyntaxNode newRemovedNode = null;
 
                     var replaceNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember != null, c => (root.GetCurrentNode(c.OldMember), c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf())));
-                    root = root.ReplaceNodes(replaceNodes.Keys, (o, r) => replaceNodes[o]);
+                    if (replaceNodes.Any())
+                    {
+                        newProcessingNode = childs.FirstOrDefault(m => m.OldMember != null && m.NewMember != null && m.OldMember == processingNode)?.NewMember;
+                        root = root.ReplaceNodes(replaceNodes.Keys, (o, r) => replaceNodes[o]);
+                    }
 
                     var removeNodes = GetFilteredNodes(childs, m => m.OldMember != null && m.NewMember == null, c => (root.GetCurrentNode(c.OldMember), null));
-                    root = root.RemoveNodes(removeNodes.Keys, SyntaxRemoveOptions.KeepNoTrivia);
+                    if (removeNodes.Any())
+                    {
+                       newRemovedNode = childs.FirstOrDefault(m => m.OldMember != null && m.NewMember == null)?.OldMember;
+
+                       root = root.RemoveNodes(removeNodes.Keys, SyntaxRemoveOptions.KeepNoTrivia);
+                    }
 
                     var insertNodes = GetFilteredNodes(childs, m => m.OldMember == null && m.NewMember != null, c => (c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf()), c.BaseMember));
                     foreach (var addNode in insertNodes.Keys)
@@ -112,7 +122,7 @@ namespace CodeGeneration.Roslyn.Engine
                     }
                     else
                     {
-                        newProcessingNode = processingNode;
+                        newProcessingNode = newRemovedNode != null ? null : processingNode;
                     }
 
                     return (root, newProcessingNode);
@@ -154,7 +164,7 @@ namespace CodeGeneration.Roslyn.Engine
 
                 newMemberNode = rootNode.GetCurrentNode(workNode) ?? workNode;
 
-                var attributeData = GetAttributeData(compilation, inputSemanticModel, workNode);                
+                var attributeData = GetAttributeData(compilation, semanticModel, newMemberNode);
 
                 var generators = FindCodeGenerators(generatorKnownTypes, attributeData, assemblyLoader);
                 foreach (var generator in generators)
@@ -181,8 +191,6 @@ namespace CodeGeneration.Roslyn.Engine
 
                     rootNodeTracked = rootNode.TrackNodes(rootNode.DescendantNodesAndSelf());
 
-                    newMemberNode = rootNode.GetCurrentNode(newMemberNode) ?? newMemberNode;
-
                     compilation = compilation.ReplaceSyntaxTree(oldRootNode.SyntaxTree, rootNode.SyntaxTree);
                     semanticModel = compilation.GetSemanticModel(rootNode.SyntaxTree);
 
@@ -190,6 +198,16 @@ namespace CodeGeneration.Roslyn.Engine
                     richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(emitted.Usings);
                     richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(emitted.AttributeLists);
                     richGeneratorResult.Members.AddRange(emitted.Members.Where(m => m.OldMember == null && m.NewMember is BaseTypeDeclarationSyntax));
+
+                    // Check current node removed
+                    if (newMemberNode != null)
+                    {
+                        newMemberNode = rootNode.GetCurrentNode(newMemberNode) ?? newMemberNode;
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
 
                 return (compilation, semanticModel, rootNode, rootNodeTracked, treeChanged,  richGeneratorResult);

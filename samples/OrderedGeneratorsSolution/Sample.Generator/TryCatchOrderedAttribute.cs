@@ -3,7 +3,7 @@
     using System;
     using CodeGeneration.Roslyn;
 
-    [AttributeUsage(AttributeTargets.All, Inherited = false)]
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
     [CodeGenerationAttribute(typeof(TryCatchOrderedGenerator))]
     public class TryCatchOrderedAttribute : OrderedCodeGenerationAttribute
     {

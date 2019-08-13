@@ -2,8 +2,9 @@
 
 namespace Sample.Consumer
 {
-    [DuplicateWithSuffixByNameOrdered("t", ExecutionOrder = 1)]
-    [TryCatchOrdered(ExecutionOrder = 2)]
+    [TryCatchOrdered(ExecutionOrder = 1)]
+    [DuplicateWithSuffixByNameOrdered("t", ExecutionOrder = 2)]    
+    [RemoveOrdered(ExecutionOrder = 3)]
     public partial class Foo
     {
         [DuplicateWithSuffixByNameOrdered("t", ExecutionOrder = 1)]

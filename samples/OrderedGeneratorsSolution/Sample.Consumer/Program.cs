@@ -8,7 +8,7 @@ namespace Sample.Consumer
     {
         public static void Main(string[] args)
         {
-            var f = new Foo();
+            var f = new Foot();
 
             f.Test2();
 
