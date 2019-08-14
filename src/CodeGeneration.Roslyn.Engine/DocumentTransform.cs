@@ -68,9 +68,6 @@ namespace CodeGeneration.Roslyn.Engine
                 .Select(x => x.WithoutTrivia())
                 .ToImmutableArray();
 
-            var emittedAttributeLists = ImmutableArray<AttributeListSyntax>.Empty;
-            var emittedMembers = ImmutableArray<MemberDeclarationSyntax>.Empty;
-
             async Task<(CSharpCompilation compilation,
                         SemanticModel semanticModel,
                         SyntaxNode resRootNode,
@@ -112,7 +109,17 @@ namespace CodeGeneration.Roslyn.Engine
                     var insertNodes = GetFilteredNodes(childs, m => m.OldMember == null && m.NewMember != null, c => (c.NewMember.TrackNodes(c.NewMember.DescendantNodesAndSelf()), c.BaseMember));
                     foreach (var addNode in insertNodes.Keys)
                     {
-                        var baseNode = root.GetCurrentNode(insertNodes[addNode]);
+                        var baseNode = insertNodes[addNode];
+                        if (baseNode == null)
+                        {
+                            baseNode = root.ChildNodes().OfType<MemberDeclarationSyntax>().Last();
+                        }
+                        else
+                        {
+                            baseNode = root.GetCurrentNode(baseNode);
+                        }
+
+                        Logger.Info($"BaseNode type = {baseNode?.GetType()}");
                         root = root.InsertNodesAfter(baseNode, new[] { addNode });
                     }
 
@@ -144,7 +151,7 @@ namespace CodeGeneration.Roslyn.Engine
                                                              || n is NamespaceDeclarationSyntax
                                                              || n is TypeDeclarationSyntax
                                                              || rootNodeIsType)
-                                                 .OfType<CSharpSyntaxNode>())
+                                                 .OfType<CSharpSyntaxNode>().ToList())
                     {
                         var processedNode = node as SyntaxNode;
 
@@ -166,7 +173,12 @@ namespace CodeGeneration.Roslyn.Engine
 
                 var attributeData = GetAttributeData(compilation, semanticModel, newMemberNode);
 
-                var generators = FindCodeGenerators(generatorKnownTypes, attributeData, assemblyLoader);
+                var generators = FindCodeGenerators(generatorKnownTypes, attributeData, assemblyLoader).ToList();
+                if (generators.Count > 0)
+                {
+                    Logger.Info($"Generators founded = {generators.Count}");
+                }
+
                 foreach (var generator in generators)
                 {
                     var context = new TransformationContext(
@@ -180,10 +192,20 @@ namespace CodeGeneration.Roslyn.Engine
                     var richGenerator = generator as IRichCodeGenerator ?? new EnrichingCodeGeneratorProxy(generator);
 
                     var emitted = await richGenerator.GenerateRichAsync(context, progress, CancellationToken.None);
+                    Logger.Info($"Processed generator = {generator.GetType()}, node = {newMemberNode}, members count = {emitted.Members.Count}");
+
+                    foreach (var member in emitted.Members)
+                    {
+                        Logger.Info($"member " +
+                                    $"OldMember type = {member.OldMember?.GetType()}, OldMember value = {member.OldMember}" +
+                                    $"BaseMember type = {member.BaseMember?.GetType()}, BaseMember value = {member.BaseMember}" +
+                                    $"NewMember type = {member.NewMember?.GetType()}, NewMember value = {member.NewMember}");
+                    }
 
                     if (!treeChanged)
                     {
-                        treeChanged = emitted.Members.Any(m => m.NewMember == null || !(m.NewMember is BaseTypeDeclarationSyntax));
+                        treeChanged = emitted.Members.Any(m => !(m.OldMember == null && m.BaseMember == null));
+                        Logger.Info($"treeChanged={treeChanged}");
                     }
 
                     var oldRootNode = rootNode;
@@ -197,7 +219,7 @@ namespace CodeGeneration.Roslyn.Engine
                     richGeneratorResult.Externs = richGeneratorResult.Externs.AddRange(emitted.Externs);
                     richGeneratorResult.Usings = richGeneratorResult.Usings.AddRange(emitted.Usings);
                     richGeneratorResult.AttributeLists = richGeneratorResult.AttributeLists.AddRange(emitted.AttributeLists);
-                    richGeneratorResult.Members.AddRange(emitted.Members.Where(m => m.OldMember == null && m.NewMember is BaseTypeDeclarationSyntax));
+                    richGeneratorResult.Members.AddRange(emitted.Members.Where(m => m.OldMember == null && m.BaseMember == null));
 
                     // Check current node removed
                     if (newMemberNode != null)
@@ -218,14 +240,9 @@ namespace CodeGeneration.Roslyn.Engine
 
             var processNodeResult = await ProcessNodeTransformation(csCompilation, inputSemanticModel, oldDocumentRootNode, documentRootNode, false, oldDocumentRootNode);
 
-            if (processNodeResult.treeChanged)
-            {
-                emittedMembers = processNodeResult.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>().ToImmutableArray();
-            }
-            else
-            {
-                emittedMembers = processNodeResult.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>().ToImmutableArray();
-            }
+            var emittedMembers = processNodeResult.treeChanged 
+                                 ? processNodeResult.resRootNode.ChildNodes().OfType<MemberDeclarationSyntax>().ToImmutableArray()
+                                 : processNodeResult.richGenerationResult.Members.Where(m => m.NewMember != null).Select(m => m.NewMember).OfType<MemberDeclarationSyntax>().ToImmutableArray();
 
             var compilationUnit = SyntaxFactory.CompilationUnit(
                         SyntaxFactory.List(emittedExterns.AddRange(processNodeResult.richGenerationResult.Externs)),
@@ -410,7 +427,7 @@ namespace CodeGeneration.Roslyn.Engine
 
                 // Figure out ancestry for the generated type, including nesting types and namespaces.
                 var wrappedMembers = context.ProcessingNode.Ancestors().Aggregate(generatedMembers, WrapInAncestor);
-                return new RichGenerationResult { Members = wrappedMembers.Select(m => ChangeMember.AddMember(context.ProcessingNode, m)).ToList() };
+                return new RichGenerationResult { Members = wrappedMembers.Select(m => ChangeMember.AddMember(null, m)).ToList() };
             }
 
             private static SyntaxList<MemberDeclarationSyntax> WrapInAncestor(SyntaxList<MemberDeclarationSyntax> generatedMembers, SyntaxNode ancestor)
